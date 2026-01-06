@@ -1006,6 +1006,17 @@ class MCPServer {
             const transports = new Map();
             // Auto-login on startup
             await this.autoLogin();
+            // CORS middleware for all routes
+            app.use((req, res, next) => {
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+                res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+                if (req.method === 'OPTIONS') {
+                    res.status(204).end();
+                    return;
+                }
+                next();
+            });
             // Health endpoint
             app.get('/health', (_req, res) => {
                 res.json({
@@ -1018,6 +1029,12 @@ class MCPServer {
             // SSE endpoint for MCP connections
             app.get('/sse', async (req, res) => {
                 this.log('info', 'New SSE connection');
+                // Set headers for SSE to work through reverse proxies
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
+                res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
+                res.flushHeaders();
                 const transport = new SSEServerTransport('/messages', res);
                 transports.set(transport.sessionId, transport);
                 res.on('close', () => {

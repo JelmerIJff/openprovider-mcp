@@ -3,7 +3,7 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
-import express, { Request, Response } from "express";
+import express, { Request, Response, NextFunction } from "express";
 import minimist from 'minimist';
 import axios from "axios";
 import { config as dotenvConfig } from "dotenv";
@@ -1085,6 +1085,18 @@ class MCPServer {
       // Auto-login on startup
       await this.autoLogin();
 
+      // CORS middleware for all routes
+      app.use((req: Request, res: Response, next: NextFunction) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+        if (req.method === 'OPTIONS') {
+          res.status(204).end();
+          return;
+        }
+        next();
+      });
+
       // Health endpoint
       app.get('/health', (_req: Request, res: Response) => {
         res.json({
@@ -1098,6 +1110,13 @@ class MCPServer {
       // SSE endpoint for MCP connections
       app.get('/sse', async (req: Request, res: Response) => {
         this.log('info', 'New SSE connection');
+
+        // Set headers for SSE to work through reverse proxies
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
+        res.flushHeaders();
 
         const transport = new SSEServerTransport('/messages', res);
         transports.set(transport.sessionId, transport);
