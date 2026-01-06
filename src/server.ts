@@ -2,6 +2,8 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
+import express, { Request, Response } from "express";
 import minimist from 'minimist';
 import axios from "axios";
 import { config as dotenvConfig } from "dotenv";
@@ -926,14 +928,37 @@ class MCPServer {
       };
     } catch (error) {
       let errorMessage = 'Authentication error';
-      
+
       if (axios.isAxiosError(error) && error.response) {
         errorMessage = `Authentication error: ${error.response.data?.desc || error.message}`;
       } else if (error instanceof Error) {
         errorMessage = `Authentication error: ${error.message}`;
       }
-      
+
       throw new Error(errorMessage);
+    }
+  }
+
+  /**
+   * Auto-login using environment variables
+   */
+  async autoLogin(): Promise<boolean> {
+    const username = process.env.OPENPROVIDER_USERNAME;
+    const password = process.env.OPENPROVIDER_PASSWORD;
+
+    if (!username || !password) {
+      this.log('info', 'No credentials in env, skipping auto-login');
+      return false;
+    }
+
+    try {
+      await this.handleLogin(TOOLS[0], { username, password });
+      this.log('info', 'Auto-login successful');
+      return true;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.log('error', `Auto-login failed: ${errorMessage}`);
+      return false;
     }
   }
 
@@ -1026,7 +1051,7 @@ class MCPServer {
   }
 
   /**
-   * Start the server
+   * Start the server with stdio transport
    */
   async startStdio() {
     try {
@@ -1045,33 +1070,123 @@ class MCPServer {
       process.exit(1);
     }
   }
+
+  /**
+   * Start the server with HTTP/SSE transport
+   */
+  async startHttp() {
+    try {
+      const port = parseInt(process.env.PORT || '3000', 10);
+      const app = express();
+
+      // Store transports by session ID for message routing
+      const transports = new Map<string, SSEServerTransport>();
+
+      // Auto-login on startup
+      await this.autoLogin();
+
+      // Health endpoint
+      app.get('/health', (_req: Request, res: Response) => {
+        res.json({
+          status: 'ok',
+          authenticated: !!this.authToken,
+          uptime: process.uptime(),
+          tools: this.tools.size
+        });
+      });
+
+      // SSE endpoint for MCP connections
+      app.get('/sse', async (req: Request, res: Response) => {
+        this.log('info', 'New SSE connection');
+
+        const transport = new SSEServerTransport('/messages', res);
+        transports.set(transport.sessionId, transport);
+
+        res.on('close', () => {
+          transports.delete(transport.sessionId);
+          this.log('info', `SSE connection closed: ${transport.sessionId}`);
+        });
+
+        await this.server.connect(transport);
+        this.log('info', `SSE connection established: ${transport.sessionId}`);
+      });
+
+      // Messages endpoint for client-to-server communication
+      app.post('/messages', express.json(), async (req: Request, res: Response) => {
+        const sessionId = req.query.sessionId as string;
+
+        if (!sessionId) {
+          res.status(400).json({ error: 'Missing sessionId query parameter' });
+          return;
+        }
+
+        const transport = transports.get(sessionId);
+        if (!transport) {
+          res.status(404).json({ error: 'Session not found' });
+          return;
+        }
+
+        try {
+          await transport.handlePostMessage(req, res);
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          this.log('error', `Error handling message: ${errorMessage}`);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Internal server error' });
+          }
+        }
+      });
+
+      app.listen(port, () => {
+        console.error(`MCP Server starting on HTTP transport at port ${port}`);
+        console.error(`Health check: http://localhost:${port}/health`);
+        console.error(`SSE endpoint: http://localhost:${port}/sse`);
+        console.error(`Registered ${this.tools.size} tools`);
+        this.log('info', `MCP Server with HTTP/SSE transport started successfully on port ${port}`);
+      });
+    } catch (error) {
+      console.error("Failed to start MCP server:", error);
+      process.exit(1);
+    }
+  }
 }
 
 // Start the server
 async function main() {
   try {
-    const argv = minimist(process.argv.slice(2), { 
-        boolean: ['help'],
-        default: {}
+    const argv = minimist(process.argv.slice(2), {
+      boolean: ['help', 'http'],
+      default: {}
     });
-        
+
     // Show help if requested
     if (argv.help) {
       console.log(`
-        Openprovider MCP Server
-        Usage: openprovider-mcp [options]
-        Options:
-          --help           Show this help message
-        Environment Variables:
-          OPENPROVIDER_USERNAME  Your Openprovider username (required)
-          OPENPROVIDER_PASSWORD  Your Openprovider password (required)
-          DEBUG                  Enable debug logging (true/false)
-        `);
+Openprovider MCP Server
+
+Usage: openprovider-mcp [options]
+
+Options:
+  --help           Show this help message
+  --http           Start with HTTP/SSE transport (for remote access)
+
+Environment Variables:
+  OPENPROVIDER_USERNAME  Your Openprovider username (required)
+  OPENPROVIDER_PASSWORD  Your Openprovider password (required)
+  PORT                   HTTP port (default: 3000, only for --http mode)
+  API_BASE_URL           OpenProvider API URL (default: https://api.openprovider.eu/v1beta)
+  DEBUG                  Enable debug logging (true/false)
+      `);
       process.exit(0);
     }
-    
+
     const server = new MCPServer();
-    await server.startStdio();
+
+    if (argv.http) {
+      await server.startHttp();
+    } else {
+      await server.startStdio();
+    }
   } catch (error) {
     console.error("Failed to start server:", error);
     process.exit(1);
