@@ -1111,12 +1111,8 @@ class MCPServer {
       app.get('/sse', async (req: Request, res: Response) => {
         this.log('info', 'New SSE connection');
 
-        // Set headers for SSE to work through reverse proxies
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        res.setHeader('X-Accel-Buffering', 'no'); // Disable nginx buffering
-        res.flushHeaders();
+        // Disable proxy buffering for SSE (set before SSEServerTransport takes over)
+        res.setHeader('X-Accel-Buffering', 'no');
 
         const transport = new SSEServerTransport('/messages', res);
         transports.set(transport.sessionId, transport);
