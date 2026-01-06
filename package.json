@@ -18,6 +18,7 @@
   "scripts": {
     "build": "tsc && node -e \"import('fs').then(fs => fs.chmodSync('server.js', '755'))\"",
     "start": "node server.js",
+    "start:http": "node server.js --http",
     "example:check": "node examples/domain-check.js",
     "example:register": "node examples/domain-register.js",
     "test": "node test/test-server.js"
@@ -26,9 +27,11 @@
     "@modelcontextprotocol/sdk": "^1.17.2",
     "axios": "^1.6.2",
     "dotenv": "^16.4.7",
+    "express": "^4.21.0",
     "minimist": "^1.2.8"
   },
   "devDependencies": {
+    "@types/express": "^5.0.0",
     "@types/minimist": "^1.2.5",
     "@types/node": "^20.10.0",
     "ts-node": "^10.9.1",
